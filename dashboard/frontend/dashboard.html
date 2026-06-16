@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Athena Security Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; display: flex; height: 100vh; }
+
+        /* Sidebar */
+        .sidebar { width: 300px; background: #161b22; border-right: 1px solid #30363d; overflow-y: auto; padding: 16px; flex-shrink: 0; }
+        .sidebar h2 { color: #58a6ff; font-size: 14px; margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .sidebar h2:first-child { margin-top: 0; }
+        .query-item { padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; margin: 2px 0; word-break: break-word; display: flex; justify-content: space-between; align-items: center; }
+        .query-item:hover { background: #21262d; }
+        .query-item.active { background: #1f6feb; color: #fff; }
+        .query-count { color: #8b949e; font-size: 11px; margin-left: 4px; }
+        .search-box { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; }
+        .search-box:focus { outline: none; border-color: #58a6ff; }
+        .search-cat-label { color: #8b949e; font-size: 11px; margin-left: 8px; }
+        .delete-btn { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 14px; padding: 0 4px; line-height: 1; }
+        .delete-btn:hover { color: #f85149; }
+        .guide-link { color: #58a6ff; font-size: 12px; cursor: pointer; text-decoration: none; margin-left: 8px; }
+        .guide-link:hover { text-decoration: underline; }
+
+        /* Main */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .header { padding: 16px 24px; border-bottom: 1px solid #30363d; }
+        .header h1 { font-size: 20px; color: #f0f6fc; }
+        .user-info { color: #8b949e; font-size: 13px; margin-top: 4px; }
+        .user-info a { color: #58a6ff; cursor: pointer; text-decoration: none; }
+
+        /* Content */
+        .content { flex: 1; overflow-y: auto; padding: 24px; }
+        .query-name { font-size: 18px; color: #f0f6fc; margin-bottom: 4px; }
+        .query-desc { color: #8b949e; font-size: 13px; margin-bottom: 16px; line-height: 1.5; }
+        .params { margin-bottom: 16px; }
+        .param-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+        .param-row label { font-size: 13px; color: #8b949e; min-width: 200px; }
+        .param-row input { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 10px; border-radius: 6px; flex: 1; font-size: 13px; }
+        .sql-editor { width: 100%; min-height: 200px; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; padding: 12px; border-radius: 6px; resize: vertical; line-height: 1.5; }
+        .controls { display: flex; gap: 12px; margin: 16px 0; align-items: center; flex-wrap: wrap; }
+        .btn { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+        .btn-run { background: #238636; color: #fff; }
+        .btn-run:hover { background: #2ea043; }
+        .btn-run:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+        .btn-stop { background: #da3633; color: #fff; }
+        .btn-save { background: #1f6feb; color: #fff; }
+        .btn-save:hover { background: #388bfd; }
+        .btn-csv { background: #30363d; color: #c9d1d9; }
+        .btn-csv:hover { background: #3b434b; }
+        .status { display: flex; gap: 16px; align-items: center; }
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .status-running { background: #1f6feb33; color: #58a6ff; }
+        .status-succeeded { background: #23863633; color: #3fb950; }
+        .status-failed { background: #da363333; color: #f85149; }
+        .stats { color: #8b949e; font-size: 12px; }
+        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #30363d; border-top: 2px solid #58a6ff; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .results-container { margin-top: 16px; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { background: #161b22; color: #8b949e; text-align: left; padding: 8px 12px; border: 1px solid #30363d; position: sticky; top: 0; white-space: nowrap; }
+        td { padding: 6px 12px; border: 1px solid #21262d; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        td:hover { white-space: normal; word-break: break-all; }
+        tr:hover td { background: #161b22; }
+        .pagination { margin-top: 12px; display: flex; gap: 12px; align-items: center; }
+        .row-count { color: #8b949e; font-size: 12px; }
+        .empty-state { text-align: center; padding: 80px 24px; color: #484f58; }
+        .empty-state h2 { font-size: 24px; margin-bottom: 8px; color: #8b949e; }
+
+        /* Modals */
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 24px; width: 500px; max-width: 90vw; }
+        .modal h3 { color: #f0f6fc; margin-bottom: 16px; }
+        .modal label { display: block; color: #8b949e; font-size: 13px; margin-bottom: 4px; margin-top: 12px; }
+        .modal input, .modal textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+        .modal textarea { min-height: 60px; resize: vertical; font-family: inherit; }
+        .modal .warning { background: #da363320; border: 1px solid #da363355; color: #f0883e; padding: 10px 12px; border-radius: 6px; font-size: 12px; margin-top: 16px; line-height: 1.5; }
+        .modal .modal-buttons { display: flex; gap: 12px; justify-content: flex-end; margin-top: 16px; }
+        .modal .btn-cancel { background: #30363d; color: #c9d1d9; }
+        .guide-modal { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 32px; width: 800px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
+        .guide-modal h2 { color: #f0f6fc; margin: 24px 0 12px; font-size: 18px; }
+        .guide-modal h2:first-child { margin-top: 0; }
+        .guide-modal h3 { color: #58a6ff; margin: 20px 0 8px; font-size: 15px; }
+        .guide-modal p { line-height: 1.6; margin-bottom: 8px; }
+        .guide-modal strong { color: #f0f6fc; }
+        .guide-modal ul { margin: 8px 0 8px 20px; }
+        .guide-modal li { margin: 4px 0; line-height: 1.5; }
+        .guide-modal code { background: #0d1117; padding: 2px 6px; border-radius: 4px; font-family: 'SF Mono', monospace; font-size: 12px; }
+        .guide-modal pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 8px 0 16px; }
+        .guide-modal pre code { padding: 0; background: none; }
+        .guide-modal table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; }
+        .guide-modal table th, .guide-modal table td { padding: 6px 10px; border: 1px solid #30363d; font-size: 12px; }
+        .guide-modal table th { background: #0d1117; color: #8b949e; }
+        .guide-modal hr { border: none; border-top: 1px solid #30363d; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="sidebar" id="sidebar"><h2>Loading queries...</h2></div>
+    <div class="main">
+        <div class="header">
+            <div>
+                <h1>Athena Security Dashboard</h1>
+                <div class="user-info">
+                    <span id="user-email"></span> | <a onclick="logout()">Sign out</a>
+                </div>
+            </div>
+        </div>
+        <div class="content" id="content">
+            <div class="empty-state">
+                <h2>Select a query</h2>
+                <p>Choose a query from the sidebar to get started</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ==================== AUTH CHECK ====================
+    function checkAuth() {
+        const token = localStorage.getItem('access_token');
+        const expiry = localStorage.getItem('token_expiry');
+        if (!token || (expiry && Date.now() > parseInt(expiry))) {
+            localStorage.clear();
+            document.cookie = 'athena_token=; path=/; max-age=0; secure; samesite=strict';
+            window.location.href = '/';
+            return false;
+        }
+        return true;
+    }
+    if (!checkAuth()) throw new Error('Not authenticated');
+
+    const API_URL = '${API_GATEWAY_URL}';
+
+    // esc() — safe for HTML text content (encodes < > &)
+    function esc(str) {
+        const d = document.createElement('div');
+        d.textContent = str || '';
+        return d.innerHTML;
+    }
+
+    // escAttr() — safe for inert HTML attribute values (title, value, placeholder, id)
+    function escAttr(str) {
+        return esc(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // escJs() — safe for values inside JavaScript string literals in inline event handlers.
+    // HTML decodes entities before JS executes, so we must escape at the JS level.
+    function escJs(str) {
+        return (str || '').replace(/[\\'"<>&\x00-\x1f\x7f]/g, function(c) {
+            return '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0');
+        });
+    }
+
+    function getAuthHeaders() { return { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }; }
+
+    function logout() {
+        localStorage.clear();
+        sessionStorage.clear();
+        document.cookie = 'athena_token=; path=/; max-age=0; secure; samesite=strict';
+        window.location.href = '/';
+    }
+
+    async function apiCall(path, options = {}) {
+        const response = await fetch(`${API_URL}${path}`, {
+            ...options, headers: { ...getAuthHeaders(), ...(options.headers || {}) },
+        });
+        if (response.status === 401) { logout(); return null; }
+        return response.json();
+    }
+
+    // ==================== STATE ====================
+    let allQueries = {};
+    let selectedQuery = null;
+    let currentExecutionId = null;
+    let pollInterval = null;
+    let searchTerm = '';
+
+    const CATEGORY_ORDER = ['Critical Incident Response', 'CloudTrail API Activity', 'Visibility & Data Gaps', 'Compliance & Inventory', 'Diagnostics', 'Other', 'Custom Queries'];
+
+    // ==================== SIDEBAR ====================
+    async function loadQueries() {
+        const data = await apiCall('/queries');
+        if (!data) return;
+        allQueries = data.categories || {};
+        renderSidebar();
+    }
+
+    function getAllQueriesFlat() {
+        const flat = [];
+        for (const [cat, queries] of Object.entries(allQueries)) {
+            for (const q of queries) flat.push({ ...q, category: cat });
+        }
+        return flat;
+    }
+
+    function renderSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const term = searchTerm.toLowerCase().trim();
+        let html = '<input type="text" class="search-box" placeholder="Search queries..." oninput="onSearch(this.value)" value="' + escAttr(searchTerm || '') + '">';
+
+        if (term) {
+            const matches = getAllQueriesFlat().filter(q =>
+                q.name.toLowerCase().includes(term) || (q.description || '').toLowerCase().includes(term)
+            );
+            if (matches.length === 0) {
+                html += '<p style="color:#484f58; padding:12px; font-size:13px;">No queries found.</p>';
+            } else {
+                for (const q of matches) {
+                    const active = selectedQuery && selectedQuery.id === q.id ? 'active' : '';
+                    const deleteBtn = q.isCustom ? `<button class="delete-btn" onclick="event.stopPropagation(); deleteCustomQuery('${escJs(q.id)}')" title="Delete">&times;</button>` : '';
+                    html += `<div class="query-item ${active}" onclick="selectQuery('${escJs(q.id)}')"><span>${esc(q.name)}<span class="search-cat-label">${esc(q.category)}</span></span>${deleteBtn}</div>`;
+                }
+            }
+        } else {
+            for (const cat of CATEGORY_ORDER) {
+                if (!allQueries[cat]) continue;
+                if (cat === 'Custom Queries') {
+                    html += `<h2>${cat} <span class="query-count">(${allQueries[cat].length})</span> <a class="guide-link" onclick="showGuide()">? Guide</a></h2>`;
+                    html += `<div class="query-item" onclick="newQuery()" style="color:#3fb950;">+ New Query</div>`;
+                } else {
+                    html += `<h2>${cat} <span class="query-count">(${allQueries[cat].length})</span></h2>`;
+                }
+                for (const q of allQueries[cat]) {
+                    const active = selectedQuery && selectedQuery.id === q.id ? 'active' : '';
+                    const deleteBtn = q.isCustom ? `<button class="delete-btn" onclick="event.stopPropagation(); deleteCustomQuery('${escJs(q.id)}')" title="Delete">&times;</button>` : '';
+                    html += `<div class="query-item ${active}" onclick="selectQuery('${escJs(q.id)}')"><span>${esc(q.name)}</span>${deleteBtn}</div>`;
+                }
+            }
+            if (!allQueries['Custom Queries']) {
+                html += `<h2>Custom Queries <span class="query-count">(0)</span> <a class="guide-link" onclick="showGuide()">? Guide</a></h2>`;
+            }
+            html += `<div class="query-item" onclick="newQuery()" style="color:#3fb950;">+ New Query</div>`;
+        }
+        sidebar.innerHTML = html;
+    }
+
+    function onSearch(value) { searchTerm = value; renderSidebar(); }
+
+    function findQuery(id) {
+        for (const cat of Object.values(allQueries)) {
+            for (const q of cat) { if (q.id === id) return q; }
+        }
+        return null;
+    }
+
+    function selectQuery(id) {
+        stopPolling();
+        selectedQuery = findQuery(id);
+        if (!selectedQuery) return;
+        renderSidebar();
+        renderQueryPanel();
+    }
+
+    // ==================== QUERY PANEL ====================
+    function renderQueryPanel() {
+        const q = selectedQuery;
+        const content = document.getElementById('content');
+        let paramsHtml = '';
+        if (q.parameters && q.parameters.length > 0) {
+            paramsHtml = '<div class="params">';
+            for (const p of q.parameters) {
+                paramsHtml += `<div class="param-row"><label>${esc(p.label)}</label><input type="text" id="param-${escAttr(p.name)}" placeholder="${escAttr(p.name)}" onchange="updateSqlParam('${escJs(p.name)}', this.value)"></div>`;
+            }
+            paramsHtml += '</div>';
+        }
+        content.innerHTML = `
+            <div class="query-name">${esc(q.name)}${q.isCustom ? ' <span style="color:#8b949e;font-size:12px;">(custom)</span>' : ''}</div>
+            <div class="query-desc">${esc(q.description || '')}</div>
+            ${paramsHtml}
+            <textarea class="sql-editor" id="sql-editor">${esc(q.sql)}</textarea>
+            <div class="controls">
+                <button class="btn btn-run" id="btn-run" onclick="runQuery()">Run Query</button>
+                <button class="btn btn-stop" id="btn-stop" onclick="stopQuery()" style="display:none;">Stop</button>
+                <button class="btn btn-save" onclick="showSaveModal()">Save as Custom Query</button>
+                <div class="status" id="status"></div>
+            </div>
+            <div class="results-container" id="results"></div>
+        `;
+    }
+
+    function updateSqlParam(paramName, value) {
+        const editor = document.getElementById('sql-editor');
+        if (!editor) return;
+        const regex = new RegExp(paramName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        editor.value = editor.value.replace(regex, value || paramName);
+    }
+
+    // ==================== QUERY EXECUTION ====================
+    async function runQuery() {
+        const sql = document.getElementById('sql-editor').value.trim();
+        if (!sql) return;
+        document.getElementById('btn-run').disabled = true;
+        document.getElementById('btn-stop').style.display = '';
+        document.getElementById('status').innerHTML = '<div class="spinner"></div> <span class="status-badge status-running">RUNNING</span>';
+        document.getElementById('results').innerHTML = '';
+        const data = await apiCall('/query/start', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sql: sql, database: selectedQuery?.database || '' }),
+        });
+        if (!data || data.error) {
+            document.getElementById('status').innerHTML = `<span class="status-badge status-failed">ERROR</span> <span class="stats">${esc(data?.error || 'Failed')}</span>`;
+            document.getElementById('btn-run').disabled = false;
+            document.getElementById('btn-stop').style.display = 'none';
+            return;
+        }
+        currentExecutionId = encodeURIComponent(data.executionId);
+        startPolling();
+    }
+
+    function startPolling() {
+        pollInterval = setInterval(async () => {
+            const data = await apiCall(`/query/status/${currentExecutionId}`);
+            if (!data) { stopPolling(); return; }
+            const mb = (data.bytesScanned / 1024 / 1024).toFixed(2);
+            if (data.state === 'SUCCEEDED') {
+                stopPolling();
+                document.getElementById('status').innerHTML = `<span class="status-badge status-succeeded">SUCCEEDED</span> <span class="stats">${esc(mb)} MB scanned | ${esc(String(data.executionTimeMs))}ms</span>`;
+                loadResults();
+            } else if (data.state === 'FAILED' || data.state === 'CANCELLED') {
+                stopPolling();
+                document.getElementById('status').innerHTML = `<span class="status-badge status-failed">${esc(data.state)}</span> <span class="stats">${esc(data.stateChangeReason || '')}</span>`;
+            } else {
+                document.getElementById('status').innerHTML = `<div class="spinner"></div> <span class="status-badge status-running">${esc(data.state)}</span> <span class="stats">${esc(mb)} MB scanned</span>`;
+            }
+        }, 2000);
+    }
+
+    function stopPolling() {
+        if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+        const btnRun = document.getElementById('btn-run');
+        const btnStop = document.getElementById('btn-stop');
+        if (btnRun) btnRun.disabled = false;
+        if (btnStop) btnStop.style.display = 'none';
+    }
+
+    async function stopQuery() {
+        if (!currentExecutionId) return;
+        await apiCall(`/query/stop/${currentExecutionId}`, { method: 'POST' });
+        stopPolling();
+        document.getElementById('status').innerHTML = '<span class="status-badge status-failed">CANCELLED</span>';
+    }
+
+    async function loadResults(nextToken) {
+        const params = nextToken ? `?nextToken=${encodeURIComponent(nextToken)}` : '';
+        const data = await apiCall(`/query/results/${currentExecutionId}${params}`);
+        if (!data || data.error) {
+            document.getElementById('results').innerHTML = `<p style="color:#f85149;">Error: ${esc(data?.error || 'Unknown')}</p>`;
+            return;
+        }
+        let html = '<table><thead><tr>';
+        for (const col of data.columns) html += `<th>${esc(col)}</th>`;
+        html += '</tr></thead><tbody>';
+        for (const row of data.rows) {
+            html += '<tr>';
+            for (const col of data.columns) html += `<td title="${escAttr(row[col] || '')}">${esc(row[col] || '')}</td>`;
+            html += '</tr>';
+        }
+        html += '</tbody></table><div class="pagination">';
+        html += `<span class="row-count">${data.rowCount} rows</span>`;
+        if (data.nextToken) html += `<button class="btn btn-csv" onclick="loadResults('${escJs(data.nextToken)}')">Load More</button>`;
+        html += `<button class="btn btn-csv" onclick="downloadCsv()">Download CSV</button></div>`;
+        document.getElementById('results').innerHTML = html;
+    }
+
+    function downloadCsv() {
+        const table = document.querySelector('#results table');
+        if (!table) return;
+        let csv = '';
+        for (const row of table.rows) {
+            csv += Array.from(row.cells).map(c => `"${c.textContent.replace(/"/g, '""')}"`).join(',') + '\n';
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        a.download = `${(selectedQuery?.name || 'query').replace(/[^a-zA-Z0-9_-]/g, '_')}-results.csv`;
+        a.click();
+    }
+
+    // ==================== NEW QUERY FROM TEMPLATE ====================
+    function newQuery() {
+        stopPolling();
+        selectedQuery = {
+            id: null,
+            name: 'New Custom Query',
+            description: 'Write your query below. Choose either the CloudTrail or Config template, delete the one you don\'t need, and uncomment the one you want to use.',
+            sql: `-- =====================================================
+-- CHOOSE ONE TEMPLATE BELOW
+-- Delete the one you don't need, uncomment the other
+-- =====================================================
+
+
+-- =====================================================
+-- OPTION 1: CLOUDTRAIL TEMPLATE
+-- Use this when you need to answer: Who did what? When? From where?
+-- Examples: console logins, IAM changes, API calls, security group mods
+-- Date format is ZERO-PADDED: '2026/07/01'
+-- =====================================================
+
+-- SELECT
+--     eventtime,
+--     eventname,
+--     useridentity.arn AS principal,
+--     sourceipaddress,
+--     awsregion,
+--     requestparameters,
+--     responseelements,
+--     errorcode
+-- FROM security_incident_response.cloudtrail_logs
+-- WHERE accountid = '123456789012'
+--     AND region = 'us-east-1'
+--     AND dt BETWEEN '2026/07/01' AND '2026/07/07'
+--     AND eventname = 'REPLACE_WITH_EVENT_NAME'
+-- ORDER BY eventtime DESC
+
+
+-- =====================================================
+-- OPTION 2: CONFIG TEMPLATE
+-- Use this when you need to answer: What does a resource look like?
+-- Examples: IAM users, security groups, S3 settings, EC2 inventory
+-- Date format is NON-PADDED: '2026/7/1'
+-- S3 and IAM are global — always use region = 'us-east-1'
+-- =====================================================
+
+-- SELECT
+--     ci.awsaccountid AS account_id,
+--     ci.awsregion AS aws_region,
+--     ci.resourcetype,
+--     ci.resourceid,
+--     ci.resourcename,
+--     ci.configuration,
+--     ci.tags
+-- FROM security_incident_response.config_snapshots
+-- CROSS JOIN UNNEST(configurationitems) AS t(ci)
+-- WHERE ci.resourcetype = 'AWS::EC2::Instance'
+--     AND ci.configurationitemstatus = 'OK'
+--     AND accountid = '123456789012'
+--     AND region = 'us-east-1'
+--     AND dt = '2026/7/1'
+-- ORDER BY ci.awsaccountid, ci.resourceid`,
+            database: 'security_incident_response',
+            parameters: [],
+            isCustom: true,
+        };
+        renderSidebar();
+        renderQueryPanel();
+    }
+
+    // ==================== CUSTOM QUERY SAVE/DELETE ====================
+    function showSaveModal() {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.id = 'save-modal';
+        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+        overlay.innerHTML = `
+            <div class="modal">
+                <h3>Save Custom Query</h3>
+                <label>Name (will be prefixed with custom_)</label>
+                <input type="text" id="save-name" placeholder="my_query_name">
+                <label>Description</label>
+                <textarea id="save-desc" placeholder="What this query does and what to look for in the results"></textarea>
+                <div class="warning">&#9888;&#65039; Reminder: Always include partition filters (accountid, region, dt) in custom queries to avoid scanning excess data and hitting the 200GB limit.</div>
+                <div class="modal-buttons">
+                    <button class="btn btn-cancel" onclick="document.getElementById('save-modal').remove()">Cancel</button>
+                    <button class="btn btn-save" onclick="saveCustomQuery()">Save</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    async function saveCustomQuery() {
+        const name = document.getElementById('save-name').value.trim();
+        const desc = document.getElementById('save-desc').value.trim();
+        const sql = document.getElementById('sql-editor')?.value?.trim() || '';
+        if (!name) { alert('Name is required'); return; }
+        if (!desc) { alert('Description is required'); return; }
+        if (!sql) { alert('No SQL to save'); return; }
+        const data = await apiCall('/query/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, description: desc, sql: sql }),
+        });
+        if (data && !data.error) {
+            document.getElementById('save-modal').remove();
+            await loadQueries();
+        } else {
+            alert('Failed to save: ' + (data?.error || 'Unknown error'));
+        }
+    }
+
+    async function deleteCustomQuery(id) {
+        if (!confirm('Delete this custom query?')) return;
+        const data = await apiCall(`/query/custom/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (data && !data.error) {
+            if (selectedQuery && selectedQuery.id === id) {
+                selectedQuery = null;
+                document.getElementById('content').innerHTML = '<div class="empty-state"><h2>Select a query</h2><p>Choose a query from the sidebar to get started</p></div>';
+            }
+            await loadQueries();
+        } else {
+            alert('Failed to delete: ' + (data?.error || 'Unknown error'));
+        }
+    }
+
+    // ==================== USER GUIDE ====================
+    function showGuide() {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.id = 'guide-modal';
+        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+        overlay.innerHTML = `
+            <div class="guide-modal">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="margin:0;">How to Write a Custom Query</h2>
+                    <button class="delete-btn" style="font-size:24px;" onclick="document.getElementById('guide-modal').remove()">&times;</button>
+                </div>
+                <h3>Step 1: Choose the Right Data Source</h3>
+                <p><strong>Use <code>cloudtrail_logs</code></strong> when you need to answer:</p>
+                <ul><li>Who did something?</li><li>When did it happen?</li><li>Where did it come from?</li></ul>
+                <p>Examples: console logins, IAM changes, S3 policy modifications, API calls</p>
+                <p><strong>Use <code>config_snapshots</code></strong> when you need to answer:</p>
+                <ul><li>What does a resource look like right now?</li><li>What is configured across my accounts?</li></ul>
+                <p>Examples: IAM users, security group rules, S3 bucket settings, EC2 inventory</p>
+                <hr>
+                <h3>Step 2: Always Start With Partition Filters</h3>
+                <p>&#9888;&#65039; <strong>This is the most important rule.</strong> Without partition filters, Athena scans the entire dataset. This is slow, expensive, and will hit the 200GB limit.</p>
+                <table><tr><th>Column</th><th>Example</th><th>Notes</th></tr>
+                <tr><td><code>accountid</code></td><td><code>accountid = '123456789012'</code></td><td>See account list below</td></tr>
+                <tr><td><code>region</code></td><td><code>region = 'us-east-1'</code></td><td>S3 and IAM: always us-east-1</td></tr>
+                <tr><td><code>dt</code></td><td><code>dt = '2026/07/01'</code></td><td>CloudTrail: zero-padded. Config: non-padded</td></tr></table>
+                <p><strong>CloudTrail:</strong> <code>'2026/07/01'</code> &nbsp; <strong>Config:</strong> <code>'2026/7/1'</code></p>
+                <hr>
+                <h3>Step 3: Use the Right Query Pattern</h3>
+                <p><strong>CloudTrail Pattern</strong></p>
+                <pre><code>SELECT eventtime, eventname, useridentity.arn, sourceipaddress
+FROM security_incident_response.cloudtrail_logs
+WHERE accountid = '123456789012'
+  AND region = 'us-east-1'
+  AND dt BETWEEN '2026/07/01' AND '2026/07/07'
+  AND eventname = 'ConsoleLogin'
+ORDER BY eventtime DESC</code></pre>
+                <p><strong>Config Pattern</strong></p>
+                <pre><code>SELECT ci.awsaccountid AS account_id, ci.resourcename, ci.configuration
+FROM security_incident_response.config_snapshots
+CROSS JOIN UNNEST(configurationitems) AS t(ci)
+WHERE accountid = '123456789012'
+  AND region = 'us-east-1'
+  AND dt = '2026/7/1'
+  AND ci.resourcetype = 'AWS::EC2::SecurityGroup'</code></pre>
+                <hr>
+                <h3>Step 4: Extracting JSON Fields</h3>
+                <p><strong>Single value:</strong></p>
+                <pre><code>json_extract_scalar(ci.configuration, '$.publicIpAddress')</code></pre>
+                <p><strong>Nested object:</strong></p>
+                <pre><code>json_extract(ci.configuration, '$.ipPermissions')</code></pre>
+                <p><strong>CloudTrail nested fields:</strong></p>
+                <pre><code>useridentity.arn
+useridentity.username
+useridentity.accesskeyid
+useridentity.sessioncontext.sessionissuer.arn</code></pre>
+                <p><strong>Config supplementary configuration:</strong></p>
+                <pre><code>element_at(ci.supplementaryconfiguration, 'PublicAccessBlockConfiguration')
+element_at(ci.supplementaryconfiguration, 'BucketLoggingConfiguration')</code></pre>
+                <hr>
+                <h3>Worked Example: Console Logins Outside Business Hours</h3>
+                <pre><code>SELECT eventtime, useridentity.arn, sourceipaddress,
+  json_extract_scalar(additionaleventdata, '$.MFAUsed') AS mfa_used
+FROM security_incident_response.cloudtrail_logs
+WHERE accountid = '123456789012'
+  AND region = 'us-east-1'
+  AND dt BETWEEN '2026/07/01' AND '2026/07/07'
+  AND eventname = 'ConsoleLogin'
+  AND HOUR(PARSE_DATETIME(eventtime, 'yyyy-MM-dd''T''HH:mm:ss''Z''')) BETWEEN 0 AND 5
+ORDER BY eventtime DESC</code></pre>
+                <hr>
+                <h3>Known Limitations</h3>
+                <ul>
+                    <li><strong>Config data is not real-time.</strong> Snapshots every 3-12 hours.</li>
+                    <li><strong>CloudTrail does not log S3 object-level access</strong> unless data events are enabled.</li>
+                    <li><strong>s3_buckets_public checks ACLs only</strong> — not bucket policies. Use S3 Access Analyzer.</li>
+                    <li><strong>S3 and IAM are global.</strong> Always use <code>region = 'us-east-1'</code>.</li>
+                </ul>
+                <hr>
+                <h3>AWS Account IDs</h3>
+                <table><tr><th>Account</th><th>ID</th></tr>
+                <tr><td>Prod</td><td>111111111104</td></tr><tr><td>Stage</td><td>111111111103</td></tr>
+                <tr><td>Dev</td><td>111111111102</td></tr><tr><td>QA</td><td>111111111107</td></tr>
+                <tr><td>Security</td><td>111111111105</td></tr><tr><td>Tooling</td><td>111111111109</td></tr>
+                <tr><td>Sandbox</td><td>111111111106</td></tr><tr><td>DataScience</td><td>111111111110</td></tr>
+                <tr><td>Root</td><td>111111111108</td></tr><tr><td>App</td><td>111111111101</td></tr>
+                <tr><td>Interconnect</td><td>111111111113</td></tr><tr><td>Carrier Interconnect</td><td>111111111114</td></tr>
+                <tr><td>Carrier Prod US-East-1</td><td>111111111115</td></tr><tr><td>Carrier Prod US-West-2</td><td>111111111116</td></tr>
+                <tr><td>Carrier Lab US-East-1</td><td>111111111117</td></tr><tr><td>Backend Test</td><td>111111111111</td></tr>
+                <tr><td>Client Test</td><td>111111111112</td></tr></table>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    // ==================== INIT ====================
+    document.getElementById('user-email').textContent = localStorage.getItem('user_email') || '';
+    loadQueries();
+    </script>
+</body>
+</html>
