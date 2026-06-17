@@ -255,20 +255,45 @@ resource "aws_s3_object" "dashboard_index" {
   etag         = filemd5("${path.module}/dashboard/frontend/index.html")
 }
 
-# Dashboard app — full application, loaded only after Okta auth
+# Login page logic — served as an external script so index.html needs no inline
+# JavaScript (required for the strict `script-src 'self'` CSP). Public path:
+# loaded by the unauthenticated login page (see PUBLIC_PATHS in auth-check.js).
+resource "aws_s3_object" "dashboard_index_js" {
+  bucket       = module.dashboard_s3.id
+  key          = "index.js"
+  content_type = "application/javascript"
+  content      = file("${path.module}/dashboard/frontend/index.js")
+  etag         = filemd5("${path.module}/dashboard/frontend/index.js")
+}
+
+# Dashboard app shell — full application markup, loaded only after Okta auth.
+# All JavaScript lives in dashboard.js (external) so the page carries no inline
+# script and satisfies the strict `script-src 'self'` CSP.
 resource "aws_s3_object" "dashboard_app" {
   bucket       = module.dashboard_s3.id
   key          = "dashboard.html"
   content_type = "text/html"
+  content      = file("${path.module}/dashboard/frontend/dashboard.html")
+  etag         = filemd5("${path.module}/dashboard/frontend/dashboard.html")
+}
+
+# Dashboard app logic — external script. ${API_GATEWAY_URL} is substituted here
+# at deploy time (the placeholder moved out of dashboard.html when the inline
+# script was extracted). Loaded only from the authenticated /dashboard.html, so
+# the request carries the auth cookie and passes the CloudFront auth check.
+resource "aws_s3_object" "dashboard_app_js" {
+  bucket       = module.dashboard_s3.id
+  key          = "dashboard.js"
+  content_type = "application/javascript"
 
   content = replace(
-    file("${path.module}/dashboard/frontend/dashboard.html"),
+    file("${path.module}/dashboard/frontend/dashboard.js"),
     "$${API_GATEWAY_URL}",
     aws_apigatewayv2_stage.dashboard.invoke_url
   )
 
   etag = md5(replace(
-    file("${path.module}/dashboard/frontend/dashboard.html"),
+    file("${path.module}/dashboard/frontend/dashboard.js"),
     "$${API_GATEWAY_URL}",
     aws_apigatewayv2_stage.dashboard.invoke_url
   ))
@@ -374,7 +399,7 @@ resource "aws_cloudfront_response_headers_policy" "dashboard" {
     }
 
     content_security_policy {
-      content_security_policy = "default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${var.okta_issuer_url} ${aws_apigatewayv2_stage.dashboard.invoke_url}; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${var.okta_issuer_url}"
+      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${var.okta_issuer_url} ${aws_apigatewayv2_stage.dashboard.invoke_url}; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' ${var.okta_issuer_url}"
       override                = true
     }
   }

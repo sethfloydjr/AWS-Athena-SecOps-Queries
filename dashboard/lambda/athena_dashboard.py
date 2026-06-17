@@ -61,16 +61,48 @@ CATEGORY_PREFIX = {
 # Pattern for detecting template parameters (ALL_CAPS_WITH_UNDERSCORES)
 PARAM_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]{2,}_HERE\b")
 
-# SQL statement blocklist — only SELECT queries are allowed.
-# Blocks DDL/DML that could write data (CTAS, UNLOAD), modify schema (DROP, ALTER),
-# or abuse the Athena workgroup (INSERT, DELETE, MSCK).
-# SQL blocklist — matches keywords separated by any whitespace or SQL comments.
-# Uses [\s/]+ to catch both normal spaces and comment-based bypass attempts
-# like CREATE/**/TABLE or CREATE--\nTABLE.
+# SQL allowlist — only read-only SELECT / WITH (CTE) statements are permitted.
+# This is the primary control: a statement that does not begin with SELECT or
+# WITH is rejected outright, so CTAS, UNLOAD, CREATE VIEW, GRANT, etc. never run.
+ALLOWED_START = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+
+# SQL blocklist — defense in depth behind the allowlist. Matches DDL/DML as
+# multi-keyword constructs (not bare keywords) so it does not false-positive on
+# data such as eventname LIKE '%Create%' or a column named "update_time". The
+# allowlist already guarantees the statement starts with SELECT/WITH; this layer
+# catches anything that slips past via a stacked statement or unusual whitespace.
 BLOCKED_SQL = re.compile(
-    r"\b(CREATE[\s/]+TABLE|CREATE[\s/]+EXTERNAL|UNLOAD|INSERT[\s/]+INTO|DROP[\s/]+|ALTER[\s/]+|MSCK[\s/]+|DELETE[\s/]+FROM|UPDATE[\s/]+|MERGE[\s/]+)\b",
+    r"\b("
+    r"CREATE[\s/]+(TABLE|EXTERNAL|VIEW|OR[\s/]+REPLACE)"
+    r"|UNLOAD[\s/]*\("
+    r"|INSERT[\s/]+INTO"
+    r"|DROP[\s/]+(TABLE|VIEW|DATABASE|SCHEMA)"
+    r"|ALTER[\s/]+(TABLE|VIEW|DATABASE|SCHEMA)"
+    r"|MSCK[\s/]+REPAIR"
+    r"|DELETE[\s/]+FROM"
+    r"|UPDATE[\s/]+\w"
+    r"|MERGE[\s/]+INTO"
+    r"|GRANT[\s/]+\w"
+    r"|REVOKE[\s/]+\w"
+    r"|PREPARE[\s/]+\w"
+    r")\b",
     re.IGNORECASE
 )
+
+# SQL comment patterns. We strip comments to a single space BEFORE running the
+# allowlist/blocklist so that comment-splitting evasions collapse back to plain
+# keywords — e.g. "CREATE/**/TABLE" and "CREATE--\nTABLE" both become
+# "CREATE TABLE" and are caught. Comments are stripped only for this security
+# check; the original SQL (comments intact) is what actually executes.
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT = re.compile(r"--[^\n]*")
+
+
+def strip_sql_comments(sql):
+    """Replace SQL comments with spaces so keyword-splitting evasions collapse."""
+    sql = _BLOCK_COMMENT.sub(" ", sql)
+    sql = _LINE_COMMENT.sub(" ", sql)
+    return sql
 
 # Friendly labels for known parameters
 PARAM_LABELS = {
@@ -165,11 +197,15 @@ def handle_start_query(event):
     if not sql:
         return response_json(400, {"error": "Missing 'sql' field"})
 
-    # Block DDL/DML — only SELECT queries are allowed
-    if BLOCKED_SQL.search(sql):
+    # Validate against comment-stripped SQL so commented-out keyword splitting
+    # (e.g. CREATE/**/TABLE) cannot evade the checks. Only read-only statements
+    # are allowed: the query must start with SELECT/WITH (allowlist) and must
+    # not contain a DDL/DML construct (blocklist, defense in depth).
+    sql_check = strip_sql_comments(sql)
+    if not ALLOWED_START.match(sql_check) or BLOCKED_SQL.search(sql_check):
         user = get_user_from_event(event)
         logger.warning(f"BLOCKED prohibited SQL from {user}: {sql[:200]}")
-        return response_json(403, {"error": "Only SELECT queries are allowed. CREATE TABLE, UNLOAD, INSERT, DROP, ALTER, and other DDL/DML statements are blocked."})
+        return response_json(403, {"error": "Only read-only SELECT queries are allowed. The statement must start with SELECT or WITH; CREATE, UNLOAD, INSERT, DROP, ALTER, and other DDL/DML statements are blocked."})
 
     # Database is hardcoded — never accept from user input to prevent
     # querying tables in other Glue databases
@@ -188,7 +224,7 @@ def handle_start_query(event):
         return response_json(200, {"executionId": execution_id})
     except Exception as e:
         logger.error(f"Failed to start query: {e}")
-        return response_json(500, {"error": str(e)})
+        return response_json(500, {"error": "Failed to start query execution."})
 
 
 def handle_query_status(event):
@@ -214,7 +250,7 @@ def handle_query_status(event):
         return response_json(200, response_data)
     except Exception as e:
         logger.error(f"Failed to get query status: {e}")
-        return response_json(500, {"error": str(e)})
+        return response_json(500, {"error": "Failed to retrieve query status."})
 
 
 def handle_query_results(event):
@@ -266,7 +302,7 @@ def handle_query_results(event):
         return response_json(200, response_data)
     except Exception as e:
         logger.error(f"Failed to get query results: {e}")
-        return response_json(500, {"error": str(e)})
+        return response_json(500, {"error": "Failed to retrieve query results."})
 
 
 def handle_save_query(event):
@@ -287,6 +323,15 @@ def handle_save_query(event):
     if not sql:
         return response_json(400, {"error": "SQL is required"})
 
+    # Apply the same read-only allowlist as /query/start so a DDL/DML statement
+    # can't be persisted into the catalog (it could never be run anyway, and
+    # keeps the save and execute paths consistent).
+    sql_check = strip_sql_comments(sql)
+    if not ALLOWED_START.match(sql_check) or BLOCKED_SQL.search(sql_check):
+        user = get_user_from_event(event)
+        logger.warning(f"BLOCKED prohibited SQL on save from {user}: {sql[:200]}")
+        return response_json(403, {"error": "Only read-only SELECT/WITH queries can be saved. CREATE, UNLOAD, INSERT, DROP, ALTER, and other DDL/DML statements are blocked."})
+
     # Enforce custom_ prefix
     if not name.startswith(CUSTOM_PREFIX):
         name = CUSTOM_PREFIX + name
@@ -305,7 +350,7 @@ def handle_save_query(event):
         return response_json(200, {"id": query_id, "name": name})
     except Exception as e:
         logger.error(f"Failed to save custom query: {e}")
-        return response_json(500, {"error": str(e)})
+        return response_json(500, {"error": "Failed to save custom query."})
 
 
 def handle_delete_custom_query(event):
@@ -331,18 +376,23 @@ def handle_delete_custom_query(event):
         return response_json(200, {"deleted": query_id})
     except Exception as e:
         logger.error(f"Failed to delete custom query: {e}")
-        return response_json(500, {"error": str(e)})
+        return response_json(500, {"error": "Failed to delete custom query."})
 
 
 def response_json(status_code, body):
-    """Return a properly formatted API Gateway response."""
+    """Return a properly formatted API Gateway response.
+
+    CORS headers are intentionally NOT set here. The HTTP API's
+    cors_configuration (see aws_apigatewayv2_api.dashboard in dashboard.tf) is
+    the single source of truth for CORS — it answers preflight OPTIONS requests
+    and injects Access-Control-Allow-* on responses. Emitting the same headers
+    from the Lambda as well would produce duplicate CORS headers, which browsers
+    reject. The allowed origin/methods/headers live in that Terraform config.
+    """
     return {
         "statusCode": status_code,
         "headers": {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "https://company-athena-dashboard.security.example.com",
-            "Access-Control-Allow-Headers": "Authorization,Content-Type",
-            "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
         },
         "body": json.dumps(body),
     }
@@ -361,7 +411,7 @@ def handle_stop_query(event):
         return response_json(200, {"stopped": execution_id})
     except Exception as e:
         logger.error(f"Failed to stop query: {e}")
-        return response_json(500, {"error": str(e)})
+        return response_json(500, {"error": "Failed to stop query."})
 
 
 def handler(event, context):

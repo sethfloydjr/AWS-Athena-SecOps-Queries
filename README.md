@@ -26,8 +26,7 @@ Two data sources answer all of these:
 - **CloudTrail logs** — *who did what and when* (every API call across the org).
 
 This stack stands up an Athena workgroup, a Glue catalog, two tables (with partition
-projection), and named queries against both. You query everything from your Security
-account without leaving SQL.
+projection), and named queries against both. You query everything from one single account across your org.
 
 <br>
 
@@ -48,7 +47,10 @@ account without leaving SQL.
 │   └── waf/                          WAFv2 WebACL module (managed rules + rate limit)
 ├── dashboard/
 │   ├── lambda/athena_dashboard.py    Dashboard backend
-│   └── frontend/                     index.html (login) + dashboard.html (app) + auth-check.js (CloudFront Function)
+│   └── frontend/                     index.html + index.js (login), dashboard.html + dashboard.js (app),
+│                                     auth-check.js (CloudFront Function). All JS is external — no inline
+│                                     script, so the page runs under a strict `script-src 'self'` CSP.
+├── .github/workflows/                CI: trufflehog.yml (secret scan) + trivy.yml (IaC misconfig + CVE scan)
 ├── _backend.tf                       S3 remote state backend
 ├── _data.tf                          Data sources + Lambda IAM policy
 ├── _locals.tf                        Org account IDs, org ID
@@ -388,8 +390,8 @@ on the dashboard immediately.
 
 1. Open the dashboard in the browser, sign in.
 2. Click **New Query** — pick the Config or CloudTrail starter template.
-3. Write your SQL. The dashboard blocks anything other than `SELECT` (no DDL/DML),
-   so you can't accidentally break the catalog.
+3. Write your SQL. The backend only allows read-only `SELECT`/`WITH` queries
+   (DDL/DML is blocked), so you can't accidentally break the catalog.
 4. Click **Save as Custom Query** to share it across the team. Custom queries are
    stored as Athena named queries with a `custom_` prefix — they appear alongside
    the pre-built ones for everyone with dashboard access.
@@ -441,9 +443,10 @@ query, tune parameters, click Run, see live results in the browser.
 User → CloudFront (HTTPS, ACM cert, WAF, security headers)
      → CloudFront Function (viewer-request: JWT cookie validation)
      → S3 origin (OAI access, not public)
-     → index.html  (login — minimal, Okta PKCE only)
+     → index.html + index.js  (login — minimal, Okta PKCE only)
      → Okta OIDC auth
-     → dashboard.html  (full app, loaded only after auth)
+     → dashboard.html + dashboard.js  (full app, loaded only after auth)
+       (JS is external — strict `script-src 'self'` CSP, no inline script)
      → API Gateway HTTP API (JWT authorizer)
      → Lambda (Python 3.12)
      → Athena → Glue → S3 data buckets
@@ -461,22 +464,46 @@ User → CloudFront (HTTPS, ACM cert, WAF, security headers)
 - **CloudFront Function auth gate** — [auth-check.js](dashboard/frontend/auth-check.js)
   runs on every viewer-request and validates the JWT cookie (`athena_token`).
   Protected paths return 403 without a valid, non-expired token from the
-  configured Okta issuer. Public paths (`/`, `/index.html`, `/robots.txt`,
-  `/.well-known/security.txt`) are exempt. CloudFront Functions cannot make
+  configured Okta issuer. Public paths (`/`, `/index.html`, `/index.js`,
+  `/robots.txt`, `/.well-known/security.txt`) are exempt — note `dashboard.js`
+  is **not** public, so the app logic only loads for authenticated users.
+  CloudFront Functions cannot make
   network calls, so this layer validates structure + `exp` + `iss` only —
   API Gateway's JWT authorizer handles cryptographic signature verification.
 - **WAF** — local WAFv2 WebACL ([modules/waf](modules/waf/)) with AWS managed rule
   groups (`CommonRuleSet`, `KnownBadInputsRuleSet`, `AmazonIpReputationList`,
   `AnonymousIpList`) plus a per-IP rate limit. CloudFront-scoped, lives in us-east-1.
-- **CloudFront** — HTTPS only with ACM cert, HSTS, CSP, X-Frame-Options,
-  X-Content-Type-Options, Referrer-Policy, Permissions-Policy. S3 metadata
-  headers stripped.
+- **CloudFront** — HTTPS only with ACM cert (TLS 1.2_2021 minimum), HSTS
+  (preload), X-Frame-Options `DENY`, X-Content-Type-Options, Referrer-Policy,
+  Permissions-Policy. S3 metadata headers stripped.
+- **Content Security Policy** — strict `script-src 'self'` (no `unsafe-inline`):
+  all JavaScript is served as external files, so there are no inline scripts or
+  inline event handlers to exploit. Also sets `object-src 'none'`,
+  `frame-ancestors 'none'`, `base-uri 'self'`, and a `connect-src` allowlist
+  limited to the Okta issuer and the API Gateway endpoint.
 - **S3** — fully locked down via OAI. Bucket has no public access.
-- **SQL validation** — Lambda blocks DDL/DML (`CREATE TABLE`, `UNLOAD`, `DROP`,
-  `ALTER`, `INSERT`, `DELETE`). Only `SELECT` is permitted.
+- **SQL validation** — the Lambda enforces a read-only **allowlist** on both the
+  run and save paths: a query must start with `SELECT` or `WITH` (CTE), or it is
+  rejected. SQL comments are stripped before the check so keyword-splitting
+  evasions (e.g. `CREATE/**/TABLE`) can't slip through, and a defense-in-depth
+  blocklist catches DDL/DML constructs
+  (`CREATE`/`DROP`/`ALTER TABLE|VIEW`, `UNLOAD`, `INSERT INTO`, `DELETE FROM`,
+  `GRANT`, etc.). This sits behind least-privilege IAM (Glue read-only, no
+  `CreateTable`) and the workgroup's `enforce_workgroup_configuration`, so even a
+  bypass cannot modify the catalog or write outside the results prefix.
 - **Split frontend** — login page (`index.html`) is minimal, no business logic.
   Dashboard (`dashboard.html`) loaded only after auth.
-- **XSS protection** — all innerHTML interpolations go through an `esc()` helper.
+- **XSS protection** — all dynamic HTML goes through `esc()` (text content) /
+  `escAttr()` (attribute values) encoders, backed by the strict CSP above.
+- **CSV export safety** — exported result cells are guarded against spreadsheet
+  formula injection (a leading `= + - @` is neutralized) so query data can't
+  execute when the CSV is opened in Excel/Sheets.
+- **CORS** — a single source of truth: the API Gateway `cors_configuration`
+  (origin locked to the dashboard domain) answers preflight and sets the
+  `Access-Control-Allow-*` headers; the Lambda does not duplicate them.
+- **Error handling** — API responses return generic error messages; full
+  exception detail is written only to CloudWatch logs, so internal infrastructure
+  details (ARNs, bucket names) are never disclosed to the browser.
 - **Audit logging** — every query execution and custom-query save/delete is
   logged with the authenticated user identity.
 
@@ -500,13 +527,31 @@ All routes require JWT authorization (Okta `id_token`).
 | Route                         | Description                                                          |
 | ----------------------------- | -------------------------------------------------------------------- |
 | `GET /queries`                | List all named queries (pre-built + custom) grouped by category      |
-| `POST /query/start`           | Start a query execution (`SELECT` only — DDL/DML blocked)            |
+| `POST /query/start`           | Start a query execution (read-only `SELECT`/`WITH` only)             |
 | `GET /query/status/{id}`      | Poll execution status + bytes scanned                                |
 | `GET /query/results/{id}`     | Fetch paginated results (1000 rows / page)                           |
+| `POST /query/stop/{id}`       | Cancel a running query execution                                     |
 | `POST /query/save`            | Save a custom named query (`custom_` prefix enforced)                |
 | `DELETE /query/custom/{id}`   | Delete a custom query (pre-built queries protected)                  |
 
 ---
+
+## Continuous Security Scanning
+
+Two GitHub Actions workflows run on every pull request to `main`
+([.github/workflows/](.github/workflows/)):
+
+| Workflow          | Tool                | What it scans                                                       |
+| ----------------- | ------------------- | ------------------------------------------------------------------- |
+| `trufflehog.yml`  | TruffleHog          | All files for leaked/verified secrets (no path filter)              |
+| `trivy.yml`       | Trivy (filesystem)  | Terraform for IaC misconfigurations + CVEs in dependencies          |
+
+Trivy runs in filesystem mode (`misconfig,vuln` scanners) — there is no container
+image in this stack — and reports HIGH/CRITICAL findings to the GitHub **Security**
+tab via SARIF. Both workflows are non-blocking (they report rather than fail the
+build) and Trivy also runs on a weekly schedule so newly-published CVEs and checks
+are caught without a code change. Secret scanning is owned solely by TruffleHog, so
+Trivy's secret scanner is intentionally disabled to avoid duplicate findings.
 
 ## Modules
 
@@ -521,11 +566,11 @@ deploy this stack standalone.
 
 ## Requirements
 
-| Name      | Version          |
-| --------- | ---------------- |
-| terraform | 1.5.5            |
-| aws       | > 5.0.0, < 6.0.0 |
-| archive   | >= 2.0.0         |
+| Name      | Version           |
+| --------- | ----------------- |
+| terraform | >= 1.15.6         |
+| aws       | >= 6.0.0, < 7.0.0 |
+| archive   | >= 2.0.0          |
 
 ## Inputs
 
