@@ -28,6 +28,7 @@ function b64decode(str) {
 var PUBLIC_PATHS = {
     '/': true,
     '/index.html': true,
+    '/index.js': true,
     '/robots.txt': true,
     '/.well-known/security.txt': true
 };

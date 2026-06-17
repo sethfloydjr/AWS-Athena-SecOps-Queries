@@ -1,0 +1,22 @@
+name: Athena SecOps — TruffleHog
+
+# TruffleHog — scans all files for leaked secrets on every PR.
+# No path filter by design: secrets can leak into any file, docs included.
+# No `push` trigger: PR merges are covered by pull_request on the merge commit.
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  trufflehog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Secret Scanning
+        uses: trufflesecurity/trufflehog@v3.95.5
+        with:
+          extra_args: --results=verified,unknown

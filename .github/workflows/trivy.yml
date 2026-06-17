@@ -1,0 +1,59 @@
+name: Athena SecOps — Trivy
+
+# Scans the repository for Terraform/IaC misconfigurations and known CVEs in
+# any bundled dependencies. This repo ships infrastructure-as-code (Terraform)
+# plus a Python Lambda — there is no Docker image to scan — so Trivy runs in
+# filesystem mode with the misconfig + vuln scanners. Secret scanning is owned
+# by the separate TruffleHog workflow, so it is intentionally left out here to
+# avoid duplicate findings.
+#
+# Reports HIGH and CRITICAL findings to the GitHub Security tab.
+#
+# Runs on every PR to main touching infra/Lambda code, and weekly so
+# newly-discovered CVEs and new Trivy misconfig checks are caught even without
+# code changes.
+# (Intentionally no `push` trigger — PR merges are already covered by
+# pull_request on the merge commit.)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.tf"
+      - "modules/**"
+      - "dashboard/**"
+      - ".github/workflows/trivy.yml"
+  schedule:
+    # Every Monday at 8am UTC
+    - cron: "0 8 * * 1"
+
+jobs:
+  trivy:
+    name: Trivy — IaC misconfig + filesystem scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run Trivy filesystem scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig,vuln
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "0"   # Don't fail the build — report to Security tab
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true   # Requires GitHub Advanced Security (paid)
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-iac

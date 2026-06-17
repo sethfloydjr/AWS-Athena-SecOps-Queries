@@ -54,7 +54,7 @@ data "aws_iam_policy_document" "dashboard_lambda_policy" {
       "athena:DeleteNamedQuery",
     ]
     resources = [
-      "arn:aws:athena:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:workgroup/security-incident-response",
+      "arn:aws:athena:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:workgroup/security-incident-response",
     ]
   }
 
@@ -110,9 +110,9 @@ data "aws_iam_policy_document" "dashboard_lambda_policy" {
       "glue:GetPartitions",
     ]
     resources = [
-      "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:catalog",
-      "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:database/security_incident_response",
-      "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/security_incident_response/*",
+      "arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:catalog",
+      "arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:database/security_incident_response",
+      "arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/security_incident_response/*",
     ]
   }
 }
