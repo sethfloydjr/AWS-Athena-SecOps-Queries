@@ -111,6 +111,9 @@ This stack consumes data — it does not produce it. Before deploying, you need:
 3. **An org-wide CloudTrail trail** writing to an S3 bucket — typically in the
    Root / org-management account. Add a bucket policy granting `s3:GetObject`
    and `s3:ListBucket` to the Security account principal that runs Athena.
+   The companion stack `AWS-Org-Cloudtrail-Cloudwatch-Alerter` provisions
+   exactly this — the org trail, the S3 bucket, and that cross-account bucket
+   policy — so if you deploy it first, this prerequisite is already satisfied.
 4. **A Terraform S3 backend** (`bucket` + `dynamodb_table`) — see
    [_backend.tf](_backend.tf).
 5. **For the optional dashboard**: a Route53 hosted zone, an Okta OIDC SPA
@@ -407,7 +410,10 @@ use that prefix.
 ## Cross-Account Access (CloudTrail bucket)
 
 The CloudTrail logs live in the Root / org-management account. The Security account
-needs read access. Add two statements to the CloudTrail bucket policy:
+needs read access via two statements on the CloudTrail bucket policy. The companion
+stack `AWS-Org-Cloudtrail-Cloudwatch-Alerter` already ships these exact
+`AthenaSecurityAccountGetObjects` / `AthenaSecurityAccountListBucket` sids, so if you
+deploy that stack you don't add them by hand. To wire it up manually instead, add:
 
 ```json
 {
