@@ -1,12 +1,15 @@
 variable "service_name" {
+  type    = string
   default = "Athena-Security-Queries"
 }
 
 variable "owning_team" {
+  type    = string
   default = "SecOps"
 }
 
 variable "automation_tf" {
+  type    = string
   default = "Terraform"
 }
 

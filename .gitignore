@@ -39,3 +39,9 @@ terraform.rc
 # Python bytecode (Lambda source is zipped from .py at apply time)
 __pycache__/
 *.py[cod]
+
+# Lambda build artifact (regenerated from the .py at apply time)
+dashboard/lambda/*.zip
+
+# Child-module provider locks (CI regenerates during its own init)
+modules/*/.terraform.lock.hcl
